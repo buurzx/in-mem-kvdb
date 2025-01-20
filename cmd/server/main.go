@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -34,7 +35,11 @@ func main() {
 
 	reader := bufio.NewReader(os.Stdin)
 
+	var ctx context.Context
+
 	for {
+		ctx = context.Background()
+
 		fmt.Println("[in-mem-kvdb] > ")
 
 		request, err := reader.ReadString('\n')
@@ -54,6 +59,7 @@ func main() {
 			break
 		}
 
-		db.HandleRequest(request)
+		response := db.HandleRequest(ctx, request)
+		fmt.Println(response)
 	}
 }
