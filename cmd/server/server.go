@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -10,15 +10,23 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/buurzx/in-mem-kvdb/internal/config"
 	"github.com/buurzx/in-mem-kvdb/internal/initialization"
+	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 )
 
-var configFileName = os.Getenv("CONFIG_FILE_NAME")
+func BuildCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "server",
+		Usage: "Start the in-memory key-value database server",
+		Action: func(c *cli.Context) error {
+			return runServer()
+		},
+	}
+}
 
-func main() {
-	config := config.MustParseConfiguration(configFileName)
+func runServer() error {
+	config := mustParseConfiguration()
 
 	logger, err := initialization.CreateLogger(
 		config.Logger.Level,
@@ -62,4 +70,6 @@ func main() {
 		response := db.HandleRequest(ctx, request)
 		fmt.Println(response)
 	}
+
+	return nil
 }

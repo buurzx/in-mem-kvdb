@@ -1,0 +1,10 @@
+engine:
+  type: "in_memory"
+network:
+  address: "127.0.0.1:3223"
+  max-connections: 100
+  max-message-size: "4KB"
+  idle-timeout: 5m
+logger:
+  level: "debug"
+  output-file-path: "logs/kvdb.log"

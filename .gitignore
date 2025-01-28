@@ -1,4 +1,4 @@
-log.txt
+logs/
 
 # Directory with binary files
-/bin/
+/bins/
