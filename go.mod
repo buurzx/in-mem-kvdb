@@ -1,6 +1,6 @@
 module github.com/buurzx/in-mem-kvdb
 
-go 1.20
+go 1.23
 
 require go.uber.org/zap v1.27.0
 
@@ -19,7 +19,6 @@ require (
 require (
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 	github.com/stretchr/testify v1.10.0
-	github.com/urfave/cli v1.22.16
 	github.com/urfave/cli/v2 v2.27.5
 	go.uber.org/multierr v1.11.0 // indirect
 )
