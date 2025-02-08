@@ -65,19 +65,14 @@ func runCli(ctx context.Context, cfg *Config) error {
 	go handleRequests(ctxWithCancel, client, logger, requestChan)
 	handleSignals(cancel, client, logger)
 
-mainLoop:
 	for {
-		select {
-		case <-ctxWithCancel.Done():
-			logger.Info("exiting kvdb-cli")
-			break mainLoop
-		default:
-			processRequest(reader, requestChan, cancel, logger)
+		if err := processRequest(ctxWithCancel, reader, requestChan, cancel, logger); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			logger.Error("process request error", zap.Error(err))
 		}
 	}
-	logger.Info("exit from the main loop")
-
-	return nil
 }
 
 func handleRequests(
@@ -96,7 +91,6 @@ requestLoop:
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("request handler goroutine exiting")
 			break requestLoop
 		case request, ok := <-requestChan:
 			if !ok {
@@ -111,7 +105,6 @@ requestLoop:
 			fmt.Println(string(response))
 		}
 	}
-	logger.Info("request handler goroutine exiting END")
 }
 
 func handleSignals(cancel context.CancelFunc, client *network.TCPClient, logger *zap.Logger) {
@@ -130,30 +123,51 @@ func handleSignals(cancel context.CancelFunc, client *network.TCPClient, logger 
 	}()
 }
 
-func processRequest(reader *bufio.Reader, requestChan chan<- string, cancel context.CancelFunc, logger *zap.Logger) {
-	fmt.Print("[in-mem-kvdb] > ")
+func processRequest(ctx context.Context, reader *bufio.Reader, requestChan chan<- string, cancel context.CancelFunc, logger *zap.Logger) error {
+	// Check if context is done before reading
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		fmt.Print("[in-mem-kvdb] > ")
+	}
 
-	request, err := reader.ReadString('\n')
-	if err != nil {
+	// Use a channel to handle read timeout
+	readChan := make(chan string)
+	errChan := make(chan error)
+
+	go func() {
+		request, err := reader.ReadString('\n')
+		if err != nil {
+			errChan <- err
+			return
+		}
+		readChan <- request
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errChan:
 		if errors.Is(err, syscall.EPIPE) {
 			logger.Fatal("connection closed", zap.Error(err))
 			cancel()
-			return
+			return err
+		}
+		logger.Error("failed to read from stdin", zap.Error(err))
+		return err
+	case request := <-readChan:
+		request = strings.TrimSpace(request)
+		if request == "exit" {
+			logger.Info("exiting in-mem-kvdb")
+			cancel()
+			return nil
 		}
 
-		logger.Error("failed to read from stdin", zap.Error(err))
-		return
+		logger.Info("write request to the channel")
+		requestChan <- request
+		logger.Info("wrote request to the channel - done")
 	}
 
-	request = strings.TrimSpace(request)
-	if request == "exit" {
-		logger.Info("exiting in-mem-kvdb")
-		cancel()
-		return
-	}
-
-	logger.Info("write request to the channel")
-	requestChan <- request
-
-	logger.Info("wrote request to the channel - done")
+	return nil
 }
