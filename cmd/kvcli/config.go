@@ -13,6 +13,8 @@ import (
 type Config struct {
 	Network struct {
 		Address string `yaml:"address" env:"KVDB_ADDRESS" env-description:"Network address"`
+		MaxMessageSize int    `yaml:"max-message-size" env:"NETWORK_MAX_MESSAGE_SIZE" env-description:"Maximum message size"`
+		IdleTimeout    int    `yaml:"idle-timeout" env:"NETWORK_IDLE_TIMEOUT" env-description:"Idle timeout"`
 	} `yaml:"network"`
 
 	Logger struct {

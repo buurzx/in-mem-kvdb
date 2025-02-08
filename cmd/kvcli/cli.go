@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/buurzx/in-mem-kvdb/internal/initialization"
+	network "github.com/buurzx/in-mem-kvdb/internal/network/tcp"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/zap"
 )
@@ -23,12 +26,14 @@ func BuildCmd() *cli.Command {
 		Usage: "A simple CLI for interacting with the in-memory key-value database",
 		Flags: cfg.buildFlags(),
 		Action: func(c *cli.Context) error {
-			return runCli(c, cfg)
+			return runCli(c.Context, cfg)
 		},
 	}
 }
 
 func runCli(ctx context.Context, cfg *Config) error {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+
 	logger, err := initialization.CreateLogger(
 		cfg.Logger.Level,
 		cfg.Logger.OutputFilePath,
@@ -41,30 +46,114 @@ func runCli(ctx context.Context, cfg *Config) error {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// create tcp connections to the server
-	for {
-		fmt.Println("[in-mem-kvdb] > ")
-
-		request, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, syscall.EPIPE) {
-				logger.Fatal("connection closed", zap.Error(err))
-				break
-			}
-
-			logger.Error("failed to read from stdin", zap.Error(err))
-			continue
-		}
-
-		request = strings.TrimSpace(request)
-		if request == "exit" {
-			logger.Info("exiting in-mem-kvdb")
-			break
-		}
-
-		response := db.HandleRequest(ctx, request)
-		fmt.Println(response)
+	options := []network.TCPClientOption{
+		network.WithClientIdleTimeout(time.Duration(cfg.Network.IdleTimeout)),
+		network.WithBufferSize(cfg.Network.MaxMessageSize),
 	}
 
+	client, err := network.NewTcpClient(cfg.Network.Address, options...)
+	if err != nil {
+		logger.Fatal("failed to create tcp client", zap.Error(err))
+	}
+
+	// create tcp connections to the server
+	// Channel for handling client requests
+	requestChan := make(chan string)
+	defer close(requestChan)
+
+	// Start goroutine to handle client requests
+	go handleRequests(ctxWithCancel, client, logger, requestChan)
+	handleSignals(cancel, client, logger)
+
+mainLoop:
+	for {
+		select {
+		case <-ctxWithCancel.Done():
+			logger.Info("exiting kvdb-cli")
+			break mainLoop
+		default:
+			processRequest(reader, requestChan, cancel, logger)
+		}
+	}
+	logger.Info("exit from the main loop")
+
 	return nil
+}
+
+func handleRequests(
+	ctx context.Context,
+	client *network.TCPClient,
+	logger *zap.Logger,
+	requestChan <-chan string,
+) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("panic in client handler", zap.Any("error", r))
+		}
+	}()
+
+requestLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("request handler goroutine exiting")
+			break requestLoop
+		case request, ok := <-requestChan:
+			if !ok {
+				logger.Info("request channel closed")
+				break requestLoop
+			}
+			response, err := client.Send([]byte(request))
+			if err != nil {
+				logger.Error("failed to send request to server", zap.Error(err))
+				continue
+			}
+			fmt.Println(string(response))
+		}
+	}
+	logger.Info("request handler goroutine exiting END")
+}
+
+func handleSignals(cancel context.CancelFunc, client *network.TCPClient, logger *zap.Logger) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		logger.Info("received signal", zap.String("signal", sig.String()))
+
+		if err := client.Close(); err != nil {
+			logger.Error("error closing client connection", zap.Error(err))
+		}
+
+		cancel()
+	}()
+}
+
+func processRequest(reader *bufio.Reader, requestChan chan<- string, cancel context.CancelFunc, logger *zap.Logger) {
+	fmt.Print("[in-mem-kvdb] > ")
+
+	request, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, syscall.EPIPE) {
+			logger.Fatal("connection closed", zap.Error(err))
+			cancel()
+			return
+		}
+
+		logger.Error("failed to read from stdin", zap.Error(err))
+		return
+	}
+
+	request = strings.TrimSpace(request)
+	if request == "exit" {
+		logger.Info("exiting in-mem-kvdb")
+		cancel()
+		return
+	}
+
+	logger.Info("write request to the channel")
+	requestChan <- request
+
+	logger.Info("wrote request to the channel - done")
 }
