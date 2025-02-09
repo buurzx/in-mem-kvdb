@@ -16,9 +16,9 @@ func WithServerMaxConnections(maxConn int) TCPServerOption {
 	}
 }
 
-func WithServerIdleTimeout(idleTimeout time.Duration) TCPServerOption {
+func WithServerIdleTimeout(timeout time.Duration) TCPServerOption {
 	return func(s *TCPServer) {
-		s.idleTimeout = idleTimeout
+		s.idleTimeout = timeout
 	}
 }
 

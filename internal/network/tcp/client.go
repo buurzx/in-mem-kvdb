@@ -14,9 +14,6 @@ type TCPClient struct {
 }
 
 func NewTcpClient(address string, options ...TCPClientOption) (*TCPClient, error) {
-	fmt.Println("dialing", address)
-	fmt.Println("options", options)
-
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, err

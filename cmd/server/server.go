@@ -44,7 +44,7 @@ func runServer(ctx context.Context) error {
 	server, err := network.NewTCPServer(
 		logger,
 		network.WithServerAddress(config.Network.Address),
-		network.WithServerIdleTimeout(time.Duration(config.Network.IdleTimeout)),
+		network.WithServerIdleTimeout(time.Duration(config.Network.IdleTimeout)*time.Second),
 		network.WithServerMaxConnections(config.Network.MaxConnections),
 		network.WithServerBufferSize(config.Network.MaxMessageSize),
 	)
@@ -52,31 +52,25 @@ func runServer(ctx context.Context) error {
 		logger.Fatal("failed to create tcp server", zap.Error(err))
 	}
 
-	// Create error channel to handle server errors
-	errChan := make(chan error, 1)
-
 	// Start server in a goroutine
 	go func() {
 		logger.Info("starting in-mem-kvdb server", zap.String("address", config.Network.Address))
-		if err := server.Start(ctxWithCancel, db); err != nil {
-			errChan <- err
-		}
+		server.Start(ctxWithCancel, db)
 	}()
 
 	handleSignals(cancel, logger)
 
 	// Wait for either context cancellation or server error
-	select {
-	case <-ctxWithCancel.Done():
-		logger.Info("shutting down server gracefully...")
-		if err := server.Close(); err != nil {
-			logger.Error("error during shutdown", zap.Error(err))
-		}
-		os.Exit(0)
-		return nil
-	case err := <-errChan:
-		return err
+
+	<-ctxWithCancel.Done()
+	logger.Info("shutting down server gracefully...")
+	if err := server.Close(); err != nil {
+		logger.Error("error during shutdown", zap.Error(err))
 	}
+
+	os.Exit(0)
+
+	return nil
 }
 
 func handleSignals(cancel context.CancelFunc, logger *zap.Logger) {

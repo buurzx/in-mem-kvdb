@@ -47,7 +47,7 @@ func runCli(ctx context.Context, cfg *Config) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	options := []network.TCPClientOption{
-		network.WithClientIdleTimeout(time.Duration(cfg.Network.IdleTimeout)),
+		network.WithClientIdleTimeout(time.Duration(cfg.Network.IdleTimeout) * time.Second),
 		network.WithBufferSize(cfg.Network.MaxMessageSize),
 	}
 
@@ -62,11 +62,11 @@ func runCli(ctx context.Context, cfg *Config) error {
 	defer close(requestChan)
 
 	// Start goroutine to handle client requests
-	go handleRequests(ctxWithCancel, client, logger, requestChan)
-	handleSignals(cancel, client, logger)
+	go sendRequests(ctxWithCancel, client, logger, requestChan)
+	handleInterruptSignals(cancel, client, logger)
 
 	for {
-		if err := processRequest(ctxWithCancel, reader, requestChan, cancel, logger); err != nil {
+		if err := routingRequests(ctxWithCancel, reader, requestChan, cancel, logger); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
@@ -75,7 +75,7 @@ func runCli(ctx context.Context, cfg *Config) error {
 	}
 }
 
-func handleRequests(
+func sendRequests(
 	ctx context.Context,
 	client *network.TCPClient,
 	logger *zap.Logger,
@@ -100,14 +100,15 @@ requestLoop:
 			response, err := client.Send([]byte(request))
 			if err != nil {
 				logger.Error("failed to send request to server", zap.Error(err))
+				fmt.Print("\n[in-mem-kvdb] > ")
 				continue
 			}
-			fmt.Println(string(response))
+			fmt.Printf("%s\n[in-mem-kvdb] > ", string(response))
 		}
 	}
 }
 
-func handleSignals(cancel context.CancelFunc, client *network.TCPClient, logger *zap.Logger) {
+func handleInterruptSignals(cancel context.CancelFunc, client *network.TCPClient, logger *zap.Logger) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -123,7 +124,13 @@ func handleSignals(cancel context.CancelFunc, client *network.TCPClient, logger 
 	}()
 }
 
-func processRequest(ctx context.Context, reader *bufio.Reader, requestChan chan<- string, cancel context.CancelFunc, logger *zap.Logger) error {
+func routingRequests(
+	ctx context.Context,
+	reader *bufio.Reader,
+	requestChan chan<- string,
+	cancel context.CancelFunc,
+	logger *zap.Logger,
+) error {
 	// Check if context is done before reading
 	select {
 	case <-ctx.Done():
@@ -135,6 +142,10 @@ func processRequest(ctx context.Context, reader *bufio.Reader, requestChan chan<
 	// Use a channel to handle read timeout
 	readChan := make(chan string)
 	errChan := make(chan error)
+	defer func() {
+		close(readChan)
+		close(errChan)
+	}()
 
 	go func() {
 		request, err := reader.ReadString('\n')
@@ -164,9 +175,7 @@ func processRequest(ctx context.Context, reader *bufio.Reader, requestChan chan<
 			return nil
 		}
 
-		logger.Info("write request to the channel")
 		requestChan <- request
-		logger.Info("wrote request to the channel - done")
 	}
 
 	return nil
