@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/buurzx/in-mem-kvdb/internal/database/compute"
 	"go.uber.org/zap"
@@ -19,10 +21,13 @@ type Storage interface {
 	Get(context.Context, string) (string, error)
 }
 
+type CommandHandler func(context.Context, []string) string
+
 type Database struct {
-	compute Compute
-	storage Storage
-	logger  *zap.Logger
+	compute  Compute
+	storage  Storage
+	logger   *zap.Logger
+	commands map[string]CommandHandler
 }
 
 func New(compute Compute, storage Storage, logger *zap.Logger) (*Database, error) {
@@ -34,46 +39,60 @@ func New(compute Compute, storage Storage, logger *zap.Logger) (*Database, error
 		return nil, errors.New("invalid logger")
 	}
 
-	return &Database{
-		compute: compute,
-		storage: storage,
-		logger:  logger,
-	}, nil
+	db := &Database{
+		compute:  compute,
+		storage:  storage,
+		logger:   logger,
+		commands: make(map[string]CommandHandler),
+	}
+
+	// Register commands
+	db.commands["GET"] = db.handleGetRequest
+	db.commands["SET"] = db.handleSetRequest
+	db.commands["DEL"] = db.handleDelRequest
+
+	return db, nil
 }
 
 func (d *Database) HandleRequest(ctx context.Context, request string) string {
-	d.logger.Debug("received request", zap.String("request", request))
-
-	query, err := d.compute.Parse(request)
-	if err != nil {
-		return fmt.Sprintf("[error] %s", err.Error())
+	parts := strings.Fields(request)
+	if len(parts) == 0 {
+		return "Empty command"
 	}
 
-	switch query.CommandID() {
-	case compute.SetCommandID:
-		return d.handleSetRequest(ctx, query)
-	case compute.GetCommandID:
-		return d.handleGetRequest(ctx, query)
-	case compute.DelCommandID:
-		return d.handleDelRequest(ctx, query)
+	command := strings.ToUpper(parts[0])
+	handler, exists := d.commands[command]
+	if !exists {
+		validCommands := make([]string, 0, len(d.commands))
+		for cmd := range d.commands {
+			validCommands = append(validCommands, cmd)
+		}
+		sort.Strings(validCommands) // Sort for consistent output
+		return fmt.Sprintf("Invalid command. Available commands: %s", strings.Join(validCommands, ", "))
 	}
 
-	d.logger.Error("unknown command", zap.String("request", request))
-
-	return "[error] internal error"
+	return handler(ctx, parts[1:])
 }
 
-func (d *Database) handleSetRequest(ctx context.Context, query compute.Query) string {
-	key := query.Arguments()[0]
-	value := query.Arguments()[1]
+func (d *Database) handleSetRequest(ctx context.Context, query []string) string {
+	if len(query) < 2 {
+		return "Invalid SET command. Usage: SET <key> <value>"
+	}
+
+	key := query[0]
+	value := query[1]
 
 	d.storage.Set(ctx, key, value)
 
 	return "[OK]"
 }
 
-func (d *Database) handleGetRequest(ctx context.Context, query compute.Query) string {
-	key := query.Arguments()[0]
+func (d *Database) handleGetRequest(ctx context.Context, query []string) string {
+	if len(query) < 1 {
+		return "Invalid GET command. Usage: GET <key>"
+	}
+
+	key := query[0]
 
 	value, err := d.storage.Get(ctx, key)
 	if err != nil {
@@ -83,8 +102,12 @@ func (d *Database) handleGetRequest(ctx context.Context, query compute.Query) st
 	return value
 }
 
-func (d *Database) handleDelRequest(ctx context.Context, query compute.Query) string {
-	key := query.Arguments()[0]
+func (d *Database) handleDelRequest(ctx context.Context, query []string) string {
+	if len(query) < 1 {
+		return "Invalid DEL command. Usage: DEL <key>"
+	}
+
+	key := query[0]
 
 	d.storage.Del(ctx, key)
 
