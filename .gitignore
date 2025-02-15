@@ -1,4 +1,3 @@
+.vscode
 logs/
-
-# Directory with binary files
 /bins/
